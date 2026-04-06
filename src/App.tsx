@@ -325,7 +325,22 @@ export default function App() {
         body: JSON.stringify({ query: targetQuery })
       });
 
-      const responseData = await response.json();
+      console.log("[v0] Response status:", response.status, response.statusText);
+      
+      const responseText = await response.text();
+      console.log("[v0] Response text:", responseText);
+      
+      if (!responseText) {
+        throw new Error('Empty response from server');
+      }
+      
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error("[v0] JSON parse error:", parseError);
+        throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
+      }
       
       if (!response.ok) {
         throw new Error(responseData.error || 'Failed to generate content');

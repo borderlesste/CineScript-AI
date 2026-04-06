@@ -56,6 +56,8 @@ async function startServer() {
     try {
       const { query } = req.body;
       
+      console.log("[v0] /api/generate called with query:", query);
+      
       if (!query) {
         return res.status(400).json({ error: "Query is required" });
       }
@@ -79,9 +81,11 @@ REGLAS DE ORO:
         output: Output.object({ schema: cineScriptSchema }),
       });
 
+      console.log("[v0] generateText result:", JSON.stringify(result, null, 2));
+      
       res.json({ data: result.object });
     } catch (error: any) {
-      console.error("Error generating content:", error);
+      console.error("[v0] Error generating content:", error);
       res.status(500).json({ error: error.message || "Failed to generate content" });
     }
   });
