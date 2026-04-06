@@ -6,7 +6,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Film, FileText, LayoutGrid as Layout, Share2, Download, Loader as Loader2, Youtube, Clapperboard, ChevronRight, Play, Info, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, Copy, Video, Settings, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { cn } from './lib/utils';
 import { CineScriptPackage } from './types';
 
@@ -45,7 +44,7 @@ const HEYGEN_VOICES = [
   { id: 'es-ES-ElviraNeural', name: 'Elvira (Female ES)' }
 ];
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+// AI calls are now handled server-side via Vercel AI Gateway
 
 export default function App() {
   const [query, setQuery] = useState(() => localStorage.getItem('last_query') || '');
@@ -70,9 +69,9 @@ export default function App() {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Status of services
+  // Status of services - Gemini now uses Vercel AI Gateway (always available)
   const [servicesStatus, setServicesStatus] = useState({
-    gemini: !!process.env.GEMINI_API_KEY,
+    gemini: true, // Always available via Vercel AI Gateway
     veo: false,
     tmdb: !!localStorage.getItem('tmdb_key'),
     heygen: !!localStorage.getItem('heygen_key') || !!process.env.HEYGEN_API_KEY
@@ -141,27 +140,26 @@ export default function App() {
 
     try {
       const fullScript = result.voiceOverScript.map(s => s.audio).join(' ');
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: `Narración profesional de cine: ${fullScript}` }] }],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
-            },
-          },
-        },
+      
+      const response = await fetch('/api/generate-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script: fullScript })
       });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-        const binary = atob(base64Audio);
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to generate audio');
+      }
+
+      if (responseData.audioBase64) {
+        const binary = atob(responseData.audioBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
           bytes[i] = binary.charCodeAt(i);
         }
-        const blob = new Blob([bytes], { type: 'audio/wav' });
+        const blob = new Blob([bytes], { type: responseData.mimeType || 'audio/wav' });
         const audioUrl = URL.createObjectURL(blob);
         setResult(prev => prev ? { ...prev, generatedAudioUrl: audioUrl } : null);
       }
@@ -283,33 +281,24 @@ export default function App() {
     if (!result) return;
     setGeneratingImage(true);
     try {
-      const prompt = `Crea un póster cinematográfico artístico y profesional para la película "${result.metadata.title}". 
-      Estilo: Cinematográfico, épico, alta resolución. 
-      Contexto: ${result.metadata.synopsis}. 
-      Elementos visuales: ${result.narrativeSummary.substring(0, 500)}.`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [{ text: prompt }],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: "3:4",
-          }
-        }
+      const response = await fetch('/api/generate-poster', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: result.metadata.title,
+          synopsis: result.metadata.synopsis,
+          narrativeSummary: result.narrativeSummary
+        })
       });
 
-      let imageUrl = '';
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-          break;
-        }
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to generate poster');
       }
 
-      if (imageUrl) {
-        setResult(prev => prev ? { ...prev, generatedImageUrl: imageUrl } : null);
+      if (responseData.imageUrl) {
+        setResult(prev => prev ? { ...prev, generatedImageUrl: responseData.imageUrl } : null);
       }
     } catch (err) {
       console.error("Error generating poster:", err);
@@ -329,168 +318,18 @@ export default function App() {
 
     try {
       console.log("Generando contenido para:", targetQuery);
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Genera el paquete CineScript AI para: "${targetQuery}"`,
-        config: {
-          systemInstruction: `Eres un experto narrador cinematográfico. Genera un paquete JSON estructurado.
-          
-          LÍMITES ESTRICTOS:
-          - synopsis: máx 200 caracteres.
-          - narrativeSummary: máx 1000 caracteres.
-          - voiceOverScript: máx 6 segmentos. Cada visual máx 300 caracteres, cada audio máx 500 caracteres.
-          - storyboard: máx 4 escenas.
-          
-          REGLAS DE ORO:
-          1. PROHIBIDO REPETIR TEXTO o entrar en bucles.
-          2. Sé extremadamente conciso.
-          3. Usa Google Search para datos reales.
-          4. Devuelve ÚNICAMENTE el JSON válido.`,
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-          maxOutputTokens: 4096,
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              metadata: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  year: { type: Type.STRING },
-                  genre: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  duration: { type: Type.STRING },
-                  rating: { type: Type.STRING },
-                  director: { type: Type.STRING },
-                  cast: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  synopsis: { type: Type.STRING }
-                }
-              },
-              narrativeSummary: { type: Type.STRING },
-              voiceOverScript: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    timecode: { type: Type.STRING },
-                    visual: { type: Type.STRING },
-                    audio: { type: Type.STRING },
-                    transition: { type: Type.STRING }
-                  }
-                }
-              },
-              storyboard: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    segment: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    visualReference: { type: Type.STRING },
-                    suggestedClips: { type: Type.ARRAY, items: { type: Type.STRING } }
-                  }
-                }
-              },
-              socialVersions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    platform: { type: Type.STRING },
-                    hook: { type: Type.STRING },
-                    keyPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    callToAction: { type: Type.STRING }
-                  }
-                }
-              },
-              youtubeReferences: { type: Type.ARRAY, items: { type: Type.STRING } }
-            }
-          }
-        }
+      
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: targetQuery })
       });
 
-      console.log("Respuesta completa de la IA:", JSON.stringify(response, null, 2));
+      const responseData = await response.json();
       
-      if (!response.text) {
-        const finishReason = response.candidates?.[0]?.finishReason;
-        console.warn("La IA no devolvió texto. FinishReason:", finishReason);
-        if (finishReason === 'SAFETY') throw new Error("Contenido bloqueado por seguridad.");
-        throw new Error("La IA no devolvió texto. Intenta de nuevo.");
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to generate content');
       }
-      
-      let cleanText = response.text.trim();
-      if (cleanText.startsWith("```json")) cleanText = cleanText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
-      else if (cleanText.startsWith("```")) cleanText = cleanText.replace(/^```\n?/, "").replace(/\n?```$/, "");
-      cleanText = cleanText.trim();
-
-      // Robust JSON repair for truncated strings
-      const repairJson = (str: string) => {
-        try {
-          JSON.parse(str);
-          return str;
-        } catch (e) {
-          let repaired = str.trim();
-          
-          // Remove trailing backslash if any
-          if (repaired.endsWith('\\')) repaired = repaired.slice(0, -1);
-
-          // Handle truncated strings
-          let quoteCount = 0;
-          let inString = false;
-          for (let i = 0; i < repaired.length; i++) {
-            if (repaired[i] === '"' && (i === 0 || repaired[i - 1] !== '\\')) {
-              quoteCount++;
-              inString = !inString;
-            }
-          }
-          
-          if (inString) {
-            repaired += '"';
-          }
-
-          // Remove trailing comma if any
-          repaired = repaired.replace(/,\s*$/, "");
-
-          // Balance braces/brackets ignoring those inside strings
-          let openBraces = 0;
-          let openBrackets = 0;
-          let currentlyInString = false;
-          
-          for (let i = 0; i < repaired.length; i++) {
-            if (repaired[i] === '"' && (i === 0 || repaired[i - 1] !== '\\')) {
-              currentlyInString = !currentlyInString;
-            }
-            if (!currentlyInString) {
-              if (repaired[i] === '{') openBraces++;
-              else if (repaired[i] === '}') openBraces--;
-              else if (repaired[i] === '[') openBrackets++;
-              else if (repaired[i] === ']') openBrackets--;
-            }
-          }
-          
-          while (openBrackets > 0) { repaired += ']'; openBrackets--; }
-          while (openBraces > 0) { repaired += '}'; openBraces--; }
-          
-          try {
-            JSON.parse(repaired);
-            return repaired;
-          } catch (e2) {
-             // Final fallback: find the last complete object or array element
-             const lastBrace = repaired.lastIndexOf('}');
-             const lastBracket = repaired.lastIndexOf(']');
-             const lastValidEnd = Math.max(lastBrace, lastBracket);
-             if (lastValidEnd > 0) {
-               try {
-                 const truncated = repaired.substring(0, lastValidEnd + 1);
-                 // We might need to close parent structures if we truncated deeply
-                 return repairJson(truncated); 
-               } catch (e3) {
-                 return repaired;
-               }
-             }
-             return repaired;
-          }
-        }
-      };
 
       const validateData = (data: any): CineScriptPackage => {
         if (!data || typeof data !== 'object') {
@@ -521,20 +360,7 @@ export default function App() {
         };
       };
 
-      try {
-        const data = JSON.parse(cleanText);
-        setResult(validateData(data));
-      } catch (parseErr) {
-        console.warn("Fallo el parseo inicial, intentando reparar...");
-        try {
-          const repaired = repairJson(cleanText);
-          const data = JSON.parse(repaired);
-          setResult(validateData(data));
-        } catch (repairErr) {
-          console.error("Error persistente de JSON:", parseErr, "Texto:", cleanText);
-          throw new Error(`Error de formato: La respuesta fue demasiado larga o se cortó. Intenta ser más específico con el título.`);
-        }
-      }
+      setResult(validateData(responseData.data));
     } catch (err: any) {
       console.error("Error en generateContent:", err);
       setError(`Error: ${err.message || "No se pudo generar el contenido. Intenta de nuevo."}`);
@@ -643,82 +469,10 @@ export default function App() {
       return;
     }
 
-    if (!hasApiKey) {
-      setError('Necesitas seleccionar una clave API de Gemini para usar Veo');
-      return;
-    }
-
-    setVeoStatus('generating');
-    setVeoProgress(0);
-    setVeoError(null);
-
-    try {
-      const prompt = `Cinematic video clip for the movie "${result.metadata.title}".
-      Synopsis: ${result.metadata.synopsis}.
-      Visual style: ${result.narrativeSummary.substring(0, 500)}.
-      High fidelity, cinematic lighting, professional production.`;
-
-      let operation = await ai.models.generateVideos({
-        model: 'veo-3.1-lite-generate-preview',
-        prompt,
-        config: {
-          numberOfVideos: 1,
-          resolution: '1080p',
-          aspectRatio: '16:9'
-        }
-      });
-
-      pollVeoStatus(operation);
-    } catch (err: any) {
-      console.error("Veo Error:", err);
-      setVeoError(err.message || "Error al iniciar la generación de video.");
-      setVeoStatus('error');
-    }
-  };
-
-  const pollVeoStatus = async (initialOperation: any) => {
-    setVeoStatus('polling');
-    let operation = initialOperation;
-    
-    try {
-      while (!operation.done) {
-        // Update progress mock (Veo API doesn't provide real-time progress percentage in the same way)
-        setVeoProgress(prev => Math.min(prev + 5, 95));
-        
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        operation = await ai.operations.getVideosOperation({ operation });
-      }
-
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (downloadLink) {
-        try {
-          const response = await fetch(downloadLink, {
-            method: 'GET',
-            headers: {
-              'x-goog-api-key': process.env.GEMINI_API_KEY || '',
-            },
-          });
-
-          if (!response.ok) {
-            throw new Error(`Error al descargar el video: ${response.status} ${response.statusText}`);
-          }
-
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          setVeoVideoUrl(url);
-          setVeoStatus('completed');
-          setVeoProgress(100);
-        } catch (fetchError: any) {
-          throw new Error(`Error en la descarga del video: ${fetchError.message}`);
-        }
-      } else {
-        throw new Error("No se encontró el enlace de descarga del video.");
-      }
-    } catch (err: any) {
-      console.error("Polling Error:", err);
-      setVeoError(err.message || "Error durante el procesamiento del video.");
-      setVeoStatus('error');
-    }
+    // Veo video generation is not yet available through the AI Gateway
+    // For now, show an informative message
+    setVeoError('La generación de video Veo está temporalmente no disponible. Usa HeyGen para generar videos con avatares AI.');
+    setVeoStatus('error');
   };
 
   const downloadScript = () => {
@@ -1011,8 +765,8 @@ export default function App() {
           <div>
             <h4 className="text-cinema-gold font-bold uppercase tracking-widest mb-6 text-sm">Arquitectura</h4>
             <ul className="text-gray-400 text-sm space-y-3">
-              <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cinema-gold" /> Gemini 3.1 Pro Engine</li>
-              <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cinema-gold" /> Google Search Grounding</li>
+              <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cinema-gold" /> Vercel AI Gateway + Gemini</li>
+              <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cinema-gold" /> AI SDK 6.0</li>
               <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-cinema-gold" /> React + Tailwind Stack</li>
             </ul>
           </div>

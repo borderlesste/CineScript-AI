@@ -77,7 +77,7 @@ export const ScriptTab: React.FC<ScriptTabProps> = ({
               </div>
               <div>
                 <h4 className="font-bold text-sm">Narración Generada</h4>
-                <p className="text-xs text-gray-500">Audio profesional por Gemini TTS</p>
+                <p className="text-xs text-gray-500">Audio profesional via Vercel AI Gateway</p>
               </div>
             </div>
             <audio src={result.generatedAudioUrl} controls className="h-8" />

@@ -62,17 +62,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <div className="space-y-6">
-              {/* Gemini Status */}
+              {/* Gemini Status - Now via Vercel AI Gateway */}
               <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.gemini ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
+                  <div className="w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)] bg-green-500 shadow-green-500/50" />
                   <div>
-                    <h4 className="font-bold text-sm">Gemini AI (Free/System)</h4>
-                    <p className="text-xs text-gray-500">Motor principal de generación</p>
+                    <h4 className="font-bold text-sm">Gemini AI (Vercel AI Gateway)</h4>
+                    <p className="text-xs text-gray-500">Motor principal de generación - Sin límites de cuota</p>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  {servicesStatus.gemini ? "CONECTADO" : "SIN CLAVE"}
+                <span className="text-[10px] font-bold text-green-400 uppercase tracking-widest">
+                  ACTIVO
                 </span>
               </div>
 
@@ -178,8 +178,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Limpiar Caché y Preferencias
               </button>
               <p className="text-[10px] text-gray-500 leading-relaxed text-center">
-                Las claves de Gemini y Veo se gestionan a través de la plataforma de AI Studio para mayor seguridad. 
-                La clave de TMDb se guarda localmente en tu navegador.
+                Gemini AI funciona automáticamente a través del Vercel AI Gateway sin necesidad de configuración. 
+                La clave de TMDb y HeyGen se guardan localmente en tu navegador.
               </p>
             </div>
           </motion.div>
