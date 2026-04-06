@@ -42,4 +42,6 @@ export interface CineScriptPackage {
   generatedImageUrl?: string;
   generatedVideoUrl?: string;
   generatedAudioUrl?: string;
+  youtubeTrailerUrl?: string;
+  ttsProvider?: 'gemini' | 'elevenlabs';
 }

@@ -1,24 +1,28 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface SettingsModalProps {
   show: boolean;
   onClose: () => void;
   servicesStatus: {
-    gemini: boolean;
-    veo: boolean;
+    gateway: boolean;
     tmdb: boolean;
     heygen: boolean;
+    elevenlabs: boolean;
+    youtube: boolean;
   };
-  openKeyDialog: () => void;
   saveTmdbKey: (key: string) => void;
   saveHeygenKey: (key: string) => void;
+  saveElevenLabsKey: (key: string) => void;
+  saveYoutubeKey: (key: string) => void;
   selectedAvatar: string;
   setSelectedAvatar: (id: string) => void;
   selectedVoice: string;
   setSelectedVoice: (id: string) => void;
+  ttsProvider: 'gemini' | 'elevenlabs';
+  setTtsProvider: (provider: 'gemini' | 'elevenlabs') => void;
   heygenAvatars: { id: string; name: string }[];
   heygenVoices: { id: string; name: string }[];
 }
@@ -27,16 +31,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   show,
   onClose,
   servicesStatus,
-  openKeyDialog,
   saveTmdbKey,
   saveHeygenKey,
+  saveElevenLabsKey,
+  saveYoutubeKey,
   selectedAvatar,
   setSelectedAvatar,
   selectedVoice,
   setSelectedVoice,
+  ttsProvider,
+  setTtsProvider,
   heygenAvatars,
   heygenVoices
 }) => {
+  const [isValidatingHeygen, setIsValidatingHeygen] = useState(false);
+  const [heygenValidationStatus, setHeygenValidationStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+  const [heygenError, setHeygenError] = useState<string | null>(null);
+
+  const validateHeygenKey = async (key: string) => {
+    if (!key) {
+      setHeygenValidationStatus('idle');
+      setHeygenError(null);
+      saveHeygenKey('');
+      return;
+    }
+
+    setIsValidatingHeygen(true);
+    setHeygenError(null);
+    
+    try {
+      const response = await fetch('/api/heygen/validate', {
+        method: 'GET',
+        headers: {
+          'x-heygen-api-key': key
+        }
+      });
+      
+      const data = await response.json();
+      if (data.valid) {
+        setHeygenValidationStatus('valid');
+        saveHeygenKey(key);
+      } else {
+        setHeygenValidationStatus('invalid');
+        setHeygenError(data.error || 'Clave de API inválida');
+      }
+    } catch (err) {
+      setHeygenValidationStatus('invalid');
+      setHeygenError('Error al validar la clave');
+    } finally {
+      setIsValidatingHeygen(false);
+    }
+  };
+
   return (
     <AnimatePresence>
       {show && (
@@ -62,35 +108,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <div className="space-y-6">
-              {/* Gemini Status */}
+              {/* Gateway Status */}
               <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.gemini ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
+                  <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.gateway ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
                   <div>
-                    <h4 className="font-bold text-sm">Gemini AI (Free/System)</h4>
-                    <p className="text-xs text-gray-500">Motor principal de generación</p>
+                    <h4 className="font-bold text-sm">Vercel AI Gateway</h4>
+                    <p className="text-xs text-gray-500">Motor principal de generación (Gemini)</p>
                   </div>
                 </div>
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  {servicesStatus.gemini ? "CONECTADO" : "SIN CLAVE"}
+                  {servicesStatus.gateway ? "CONECTADO" : "SIN CLAVE"}
                 </span>
-              </div>
-
-              {/* Veo Status */}
-              <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.veo ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
-                  <div>
-                    <h4 className="font-bold text-sm">Veo 3.1 (Paid/Video)</h4>
-                    <p className="text-xs text-gray-500">Generación de video cinematográfico</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={openKeyDialog}
-                  className="px-3 py-1.5 bg-cinema-gold text-black text-[10px] font-black rounded-lg hover:bg-yellow-400 transition-all"
-                >
-                  {servicesStatus.veo ? "CAMBIAR CLAVE" : "SELECCIONAR CLAVE"}
-                </button>
               </div>
 
               {/* TMDb Status */}
@@ -127,15 +156,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
                 <div className="space-y-4">
-                  <div className="flex gap-2">
+                  <div className="relative">
                     <input 
                       type="password" 
                       defaultValue={localStorage.getItem('heygen_key') || ''}
                       placeholder="Ingresa tu API Key de HeyGen"
-                      className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold"
-                      onBlur={(e) => saveHeygenKey(e.target.value)}
+                      className={cn(
+                        "w-full bg-black/40 border rounded-lg px-3 py-2 text-xs focus:outline-none transition-colors pr-10",
+                        heygenValidationStatus === 'valid' ? "border-green-500/50 focus:border-green-500" : 
+                        heygenValidationStatus === 'invalid' ? "border-red-500/50 focus:border-red-500" : 
+                        "border-white/10 focus:border-cinema-gold"
+                      )}
+                      onChange={(e) => {
+                        if (heygenValidationStatus !== 'idle') setHeygenValidationStatus('idle');
+                      }}
+                      onBlur={(e) => validateHeygenKey(e.target.value)}
                     />
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      {isValidatingHeygen ? (
+                        <Loader2 className="w-4 h-4 text-cinema-gold animate-spin" />
+                      ) : heygenValidationStatus === 'valid' ? (
+                        <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      ) : heygenValidationStatus === 'invalid' ? (
+                        <AlertCircle className="w-4 h-4 text-red-500" />
+                      ) : null}
+                    </div>
                   </div>
+                  
+                  {heygenError && (
+                    <p className="text-[10px] text-red-500 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {heygenError}
+                    </p>
+                  )}
                   
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
@@ -165,6 +218,79 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* ElevenLabs Status */}
+              <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.elevenlabs ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
+                    <div>
+                      <h4 className="font-bold text-sm">ElevenLabs (Premium TTS)</h4>
+                      <p className="text-xs text-gray-500">Voces ultra-realistas para narración</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <input 
+                    type="password" 
+                    defaultValue={localStorage.getItem('elevenlabs_key') || ''}
+                    placeholder="Ingresa tu API Key de ElevenLabs"
+                    className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold"
+                    onBlur={(e) => saveElevenLabsKey(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* YouTube Status */}
+              <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.youtube ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
+                    <div>
+                      <h4 className="font-bold text-sm">YouTube Data API</h4>
+                      <p className="text-xs text-gray-500">Búsqueda de trailers y referencias</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <input 
+                    type="password" 
+                    defaultValue={localStorage.getItem('youtube_key') || ''}
+                    placeholder="Ingresa tu API Key de YouTube"
+                    className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold"
+                    onBlur={(e) => saveYoutubeKey(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* TTS Provider Selection */}
+              <div className="p-4 bg-cinema-gold/5 rounded-2xl border border-cinema-gold/20 space-y-3">
+                <h4 className="text-[10px] font-bold text-cinema-gold uppercase tracking-widest">Proveedor de Narración (TTS)</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  <button 
+                    onClick={() => setTtsProvider('gemini')}
+                    className={cn(
+                      "py-2 px-3 rounded-xl text-[10px] font-bold transition-all border",
+                      ttsProvider === 'gemini' 
+                        ? "bg-cinema-gold text-black border-cinema-gold" 
+                        : "bg-white/5 text-gray-400 border-white/10 hover:bg-white/10"
+                    )}
+                  >
+                    GEMINI (GRATIS)
+                  </button>
+                  <button 
+                    onClick={() => setTtsProvider('elevenlabs')}
+                    className={cn(
+                      "py-2 px-3 rounded-xl text-[10px] font-bold transition-all border",
+                      ttsProvider === 'elevenlabs' 
+                        ? "bg-cinema-gold text-black border-cinema-gold" 
+                        : "bg-white/5 text-gray-400 border-white/10 hover:bg-white/10"
+                    )}
+                  >
+                    ELEVENLABS (PRO)
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="mt-8 pt-6 border-t border-white/10 space-y-4">
@@ -178,8 +304,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Limpiar Caché y Preferencias
               </button>
               <p className="text-[10px] text-gray-500 leading-relaxed text-center">
-                Las claves de Gemini y Veo se gestionan a través de la plataforma de AI Studio para mayor seguridad. 
-                La clave de TMDb se guarda localmente en tu navegador.
+                La clave de Vercel AI Gateway se gestiona a través de las variables de entorno. 
+                Las claves de TMDb, HeyGen, ElevenLabs y YouTube se guardan localmente en tu navegador para mayor comodidad.
               </p>
             </div>
           </motion.div>

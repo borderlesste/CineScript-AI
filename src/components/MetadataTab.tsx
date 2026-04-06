@@ -76,6 +76,27 @@ export const MetadataTab: React.FC<MetadataTabProps> = ({ result, generatingImag
           <ReactMarkdown>{result.narrativeSummary}</ReactMarkdown>
         </div>
       </div>
+
+      {result.youtubeTrailerUrl && (
+        <div className="border-t border-white/10 pt-8">
+          <h3 className="text-2xl font-display font-bold mb-6 flex items-center gap-3">
+            <span className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
+              <Film className="w-4 h-4 text-white" />
+            </span>
+            Trailer Oficial & Referencias
+          </h3>
+          <div className="aspect-video w-full rounded-3xl overflow-hidden border border-white/10 bg-black shadow-2xl">
+            <iframe 
+              src={result.youtubeTrailerUrl}
+              title="YouTube video player"
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+              className="w-full h-full"
+            ></iframe>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -20,7 +20,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Copy,
-  Video,
   Settings,
   Plus
 } from 'lucide-react';
@@ -37,7 +36,6 @@ import { MetadataTab } from './components/MetadataTab';
 import { ScriptTab } from './components/ScriptTab';
 import { StoryboardTab } from './components/StoryboardTab';
 import { SocialTab } from './components/SocialTab';
-import { VideoTab } from './components/VideoTab';
 
 declare global {
   interface Window {
@@ -64,37 +62,32 @@ const HEYGEN_VOICES = [
   { id: 'es-ES-ElviraNeural', name: 'Elvira (Female ES)' }
 ];
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const ai = new GoogleGenAI({ apiKey: process.env.AI_GATEWAY_API_KEY || '' });
 
 export default function App() {
   const [query, setQuery] = useState(() => localStorage.getItem('last_query') || '');
   const [loading, setLoading] = useState(false);
   const [generatingImage, setGeneratingImage] = useState(false);
-  const [generatingVideo, setGeneratingVideo] = useState(false);
   const [generatingAudio, setGeneratingAudio] = useState(false);
-  const [exportingVideo, setExportingVideo] = useState(false);
-  const [videoProgress, setVideoProgress] = useState('');
   const [result, setResult] = useState<CineScriptPackage | null>(null);
   const [heygenVideoUrl, setHeygenVideoUrl] = useState<string | null>(null);
   const [heygenStatus, setHeygenStatus] = useState<'idle' | 'generating' | 'polling' | 'completed' | 'error'>('idle');
   const [heygenError, setHeygenError] = useState<string | null>(null);
-  const [veoStatus, setVeoStatus] = useState<'idle' | 'generating' | 'polling' | 'completed' | 'error'>('idle');
-  const [veoProgress, setVeoProgress] = useState(0);
-  const [veoVideoUrl, setVeoVideoUrl] = useState<string | null>(null);
-  const [veoError, setVeoError] = useState<string | null>(null);
   const [selectedAvatar, setSelectedAvatar] = useState(() => localStorage.getItem('heygen_avatar') || HEYGEN_AVATARS[0].id);
   const [selectedVoice, setSelectedVoice] = useState(() => localStorage.getItem('heygen_voice') || HEYGEN_VOICES[0].id);
-  const [activeTab, setActiveTab] = useState<'metadata' | 'script' | 'storyboard' | 'social' | 'json' | 'video'>(() => (localStorage.getItem('active_tab') as any) || 'metadata');
+  const [ttsProvider, setTtsProvider] = useState<'gemini' | 'elevenlabs'>(() => (localStorage.getItem('tts_provider') as any) || 'gemini');
+  const [activeTab, setActiveTab] = useState<'metadata' | 'script' | 'storyboard' | 'social' | 'json'>(() => (localStorage.getItem('active_tab') as any) || 'metadata');
   const [error, setError] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
   // Status of services
   const [servicesStatus, setServicesStatus] = useState({
-    gemini: !!process.env.GEMINI_API_KEY,
-    veo: false,
+    gateway: !!process.env.AI_GATEWAY_API_KEY,
     tmdb: !!localStorage.getItem('tmdb_key'),
-    heygen: !!localStorage.getItem('heygen_key') || !!process.env.HEYGEN_API_KEY
+    heygen: !!localStorage.getItem('heygen_key') || !!process.env.HEYGEN_API_KEY,
+    elevenlabs: !!localStorage.getItem('elevenlabs_key') || !!process.env.ELEVENLABS_API_KEY,
+    youtube: !!localStorage.getItem('youtube_key') || !!process.env.YOUTUBE_API_KEY
   });
 
   useEffect(() => {
@@ -110,6 +103,10 @@ export default function App() {
   }, [selectedAvatar]);
 
   useEffect(() => {
+    localStorage.setItem('tts_provider', ttsProvider);
+  }, [ttsProvider]);
+
+  useEffect(() => {
     localStorage.setItem('heygen_voice', selectedVoice);
   }, [selectedVoice]);
 
@@ -118,7 +115,6 @@ export default function App() {
       if (window.aistudio?.hasSelectedApiKey) {
         const hasKey = await window.aistudio.hasSelectedApiKey();
         setHasApiKey(hasKey);
-        setServicesStatus(prev => ({ ...prev, veo: hasKey }));
       }
     };
     checkKey();
@@ -129,7 +125,6 @@ export default function App() {
       await window.aistudio.openSelectKey();
       const hasKey = await window.aistudio.hasSelectedApiKey();
       setHasApiKey(hasKey);
-      setServicesStatus(prev => ({ ...prev, veo: hasKey }));
     }
   };
 
@@ -143,153 +138,119 @@ export default function App() {
     setServicesStatus(prev => ({ ...prev, heygen: !!key || !!process.env.HEYGEN_API_KEY }));
   };
 
+  const saveElevenLabsKey = (key: string) => {
+    localStorage.setItem('elevenlabs_key', key);
+    setServicesStatus(prev => ({ ...prev, elevenlabs: !!key || !!process.env.ELEVENLABS_API_KEY }));
+  };
+
+  const saveYoutubeKey = (key: string) => {
+    localStorage.setItem('youtube_key', key);
+    setServicesStatus(prev => ({ ...prev, youtube: !!key || !!process.env.YOUTUBE_API_KEY }));
+  };
+
   const generateAudio = async () => {
     if (!result || !result.voiceOverScript) return;
+    
+    if (ttsProvider === 'gemini') {
+      if (!process.env.AI_GATEWAY_API_KEY) {
+        setError("Falta la clave de API de Vercel AI Gateway. Configúrala en los secretos.");
+        return;
+      }
+    } else {
+      const elKey = localStorage.getItem('elevenlabs_key') || process.env.ELEVENLABS_API_KEY;
+      if (!elKey) {
+        setError("Falta la clave de API de ElevenLabs. Configúrala en los ajustes.");
+        return;
+      }
+    }
+
     setGeneratingAudio(true);
     setError(null);
 
     try {
       const fullScript = result.voiceOverScript.map(s => s.audio).join(' ');
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: `Narración profesional de cine: ${fullScript}` }] }],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
+      
+      if (ttsProvider === 'gemini') {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash-preview-tts",
+          contents: [{ parts: [{ text: `Narración profesional de cine: ${fullScript}` }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: 'Kore' },
+              },
             },
           },
-        },
-      });
+        });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-        const binary = atob(base64Audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
+        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+          const binary = atob(base64Audio);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          const blob = new Blob([bytes], { type: 'audio/wav' });
+          const audioUrl = URL.createObjectURL(blob);
+          setResult(prev => prev ? { ...prev, generatedAudioUrl: audioUrl, ttsProvider: 'gemini' } : null);
         }
-        const blob = new Blob([bytes], { type: 'audio/wav' });
-        const audioUrl = URL.createObjectURL(blob);
-        setResult(prev => prev ? { ...prev, generatedAudioUrl: audioUrl } : null);
+      } else {
+        // ElevenLabs
+        const elKey = localStorage.getItem('elevenlabs_key') || process.env.ELEVENLABS_API_KEY;
+        const response = await fetch('/api/elevenlabs/tts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'xi-api-key': elKey || '',
+          },
+          body: JSON.stringify({
+            text: fullScript,
+            voice_id: "21m00Tcm4TlvDq8ikWAM", // Default voice
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.detail?.message || "Error en ElevenLabs");
+        }
+
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        setResult(prev => prev ? { ...prev, generatedAudioUrl: audioUrl, ttsProvider: 'elevenlabs' } : null);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error generating audio:", err);
-      setError("No se pudo generar la narración de voz. Intenta de nuevo.");
+      setError(`Error al generar audio: ${err.message}`);
     } finally {
       setGeneratingAudio(false);
     }
   };
 
-  const exportToVideo = async () => {
-    if (!result || !result.generatedAudioUrl) return;
-    setExportingVideo(true);
-    setVideoProgress('Preparando exportación...');
+  const searchYoutubeTrailer = async (movieTitle: string) => {
+    const youtubeKey = localStorage.getItem('youtube_key') || process.env.YOUTUBE_API_KEY;
+    if (!youtubeKey) return;
 
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = 1280;
-      canvas.height = 720;
-      const ctx = canvas.getContext('2d')!;
-      
-      const audio = new Audio(result.generatedAudioUrl);
-      const stream = canvas.captureStream(30);
-      
-      const audioCtx = new AudioContext();
-      const source = audioCtx.createMediaElementSource(audio);
-      const dest = audioCtx.createMediaStreamDestination();
-      source.connect(dest);
-      source.connect(audioCtx.destination);
-      stream.addTrack(dest.stream.getAudioTracks()[0]);
-
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus' });
-      const chunks: Blob[] = [];
-      
-      recorder.ondataavailable = (e) => chunks.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${result.metadata.title}_CineScript.webm`;
-        a.click();
-        setExportingVideo(false);
-      };
-
-      let posterImg: HTMLImageElement | null = null;
-      if (result.generatedImageUrl) {
-        posterImg = new Image();
-        posterImg.src = result.generatedImageUrl;
-        await new Promise(r => posterImg!.onload = r);
+      const response = await fetch(
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(movieTitle + ' official trailer')}&type=video&maxResults=1&key=${youtubeKey}`
+      );
+      const data = await response.json();
+      if (data.items && data.items.length > 0) {
+        const videoId = data.items[0].id.videoId;
+        setResult(prev => prev ? { ...prev, youtubeTrailerUrl: `https://www.youtube.com/embed/${videoId}` } : null);
       }
-
-      recorder.start();
-      audio.play();
-
-      const startTime = Date.now();
-      const duration = 30000;
-
-      const renderFrame = () => {
-        if (audio.ended || (Date.now() - startTime) > duration) {
-          recorder.stop();
-          audio.pause();
-          return;
-        }
-
-        const elapsed = (Date.now() - startTime) / 1000;
-        
-        ctx.fillStyle = '#0a0a0a';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        if (posterImg) {
-          const scale = Math.max(canvas.width / posterImg.width, canvas.height / posterImg.height);
-          const x = (canvas.width / 2) - (posterImg.width * scale / 2);
-          const y = (canvas.height / 2) - (posterImg.height * scale / 2);
-          ctx.globalAlpha = 0.3;
-          ctx.drawImage(posterImg, x, y, posterImg.width * scale, posterImg.height * scale);
-          ctx.globalAlpha = 1.0;
-        }
-
-        const segment = result.voiceOverScript.find(s => {
-          const [start, end] = s.timecode.split('-').map(t => {
-            const [m, s] = t.split(':').map(Number);
-            return m * 60 + s;
-          });
-          return elapsed >= start && elapsed <= end;
-        });
-
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 40px Space Grotesk';
-        ctx.textAlign = 'center';
-        ctx.fillText(result.metadata.title.toUpperCase(), canvas.width / 2, 80);
-
-        if (segment) {
-          ctx.fillStyle = '#eab308';
-          ctx.font = '30px Inter';
-          const lines = (segment.audio.match(/.{1,60}(\s|$)/g) || []) as string[];
-          lines.forEach((line, i) => {
-            ctx.fillText(line.trim(), canvas.width / 2, 400 + (i * 40));
-          });
-
-          ctx.fillStyle = 'rgba(255,255,255,0.5)';
-          ctx.font = 'italic 20px Inter';
-          ctx.fillText(`Visual: ${segment.visual}`, canvas.width / 2, 650);
-        }
-
-        requestAnimationFrame(renderFrame);
-      };
-
-      renderFrame();
     } catch (err) {
-      console.error("Export error:", err);
-      setExportingVideo(false);
-      setError("Error al exportar el video. Asegúrate de que tu navegador soporte MediaRecorder.");
+      console.error("Error searching YouTube trailer:", err);
     }
   };
 
   const generatePoster = async () => {
     if (!result) return;
+    if (!process.env.AI_GATEWAY_API_KEY) {
+      setError("Falta la clave de API de Vercel AI Gateway. Configúrala en los secretos.");
+      return;
+    }
     setGeneratingImage(true);
     try {
       const prompt = `Crea un póster cinematográfico artístico y profesional para la película "${result.metadata.title}". 
@@ -332,6 +293,11 @@ export default function App() {
     const targetQuery = overrideQuery || query;
     if (!targetQuery.trim()) return;
     
+    if (!process.env.AI_GATEWAY_API_KEY) {
+      setError("Falta la clave de API de Vercel AI Gateway. Configúrala en los secretos.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setResult(null);
@@ -349,6 +315,7 @@ export default function App() {
           - narrativeSummary: máx 1000 caracteres.
           - voiceOverScript: máx 6 segmentos. Cada visual máx 300 caracteres, cada audio máx 500 caracteres.
           - storyboard: máx 4 escenas.
+          - socialVersions: genera exactamente 3 versiones con los nombres de plataforma: "TikTok", "Instagram Reels", "YouTube Shorts".
           
           REGLAS DE ORO:
           1. PROHIBIDO REPETIR TEXTO o entrar en bucles.
@@ -528,13 +495,21 @@ export default function App() {
 
       try {
         const data = JSON.parse(cleanText);
-        setResult(validateData(data));
+        const validated = validateData(data);
+        setResult(validated);
+        if (validated.metadata.title) {
+          searchYoutubeTrailer(validated.metadata.title);
+        }
       } catch (parseErr) {
         console.warn("Fallo el parseo inicial, intentando reparar...");
         try {
           const repaired = repairJson(cleanText);
           const data = JSON.parse(repaired);
-          setResult(validateData(data));
+          const validated = validateData(data);
+          setResult(validated);
+          if (validated.metadata.title) {
+            searchYoutubeTrailer(validated.metadata.title);
+          }
         } catch (repairErr) {
           console.error("Error persistente de JSON:", parseErr, "Texto:", cleanText);
           throw new Error(`Error de formato: La respuesta fue demasiado larga o se cortó. Intenta ser más específico con el título.`);
@@ -633,77 +608,6 @@ export default function App() {
     }, 5000);
   };
 
-  const generateVeoVideo = async () => {
-    if (!result || !hasApiKey) return;
-    
-    setVeoStatus('generating');
-    setVeoProgress(0);
-    setVeoError(null);
-    
-    try {
-      const prompt = `Cinematic video clip for the movie "${result.metadata.title}". 
-      Synopsis: ${result.metadata.synopsis}. 
-      Visual style: ${result.narrativeSummary.substring(0, 500)}. 
-      High fidelity, cinematic lighting, professional production.`;
-
-      let operation = await ai.models.generateVideos({
-        model: 'veo-3.1-lite-generate-preview',
-        prompt,
-        config: {
-          numberOfVideos: 1,
-          resolution: '1080p',
-          aspectRatio: '16:9'
-        }
-      });
-
-      pollVeoStatus(operation);
-    } catch (err: any) {
-      console.error("Veo Error:", err);
-      setVeoError(err.message || "Error al iniciar la generación de video.");
-      setVeoStatus('error');
-    }
-  };
-
-  const pollVeoStatus = async (initialOperation: any) => {
-    setVeoStatus('polling');
-    let operation = initialOperation;
-    
-    try {
-      while (!operation.done) {
-        // Update progress mock (Veo API doesn't provide real-time progress percentage in the same way)
-        setVeoProgress(prev => Math.min(prev + 5, 95));
-        
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        operation = await ai.operations.getVideosOperation({ operation });
-      }
-
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (downloadLink) {
-        // Fetch the video with the API key
-        const response = await fetch(downloadLink, {
-          method: 'GET',
-          headers: {
-            'x-goog-api-key': process.env.API_KEY || '',
-          },
-        });
-        
-        if (!response.ok) throw new Error("Error al descargar el video generado.");
-        
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        setVeoVideoUrl(url);
-        setVeoStatus('completed');
-        setVeoProgress(100);
-      } else {
-        throw new Error("No se encontró el enlace de descarga del video.");
-      }
-    } catch (err: any) {
-      console.error("Polling Error:", err);
-      setVeoError(err.message || "Error durante el procesamiento del video.");
-      setVeoStatus('error');
-    }
-  };
-
   const downloadScript = () => {
     if (!result || !result.voiceOverScript) return;
     const content = result.voiceOverScript.map(s => `[${s.timecode}]\nVISUAL: ${s.visual}\nAUDIO: ${s.audio}\nTRANSICIÓN: ${s.transition}\n-------------------\n`).join('\n');
@@ -758,13 +662,16 @@ export default function App() {
         show={showSettings}
         onClose={() => setShowSettings(false)}
         servicesStatus={servicesStatus}
-        openKeyDialog={openKeyDialog}
         saveTmdbKey={saveTmdbKey}
         saveHeygenKey={saveHeygenKey}
+        saveElevenLabsKey={saveElevenLabsKey}
+        saveYoutubeKey={saveYoutubeKey}
         selectedAvatar={selectedAvatar}
         setSelectedAvatar={setSelectedAvatar}
         selectedVoice={selectedVoice}
         setSelectedVoice={setSelectedVoice}
+        ttsProvider={ttsProvider}
+        setTtsProvider={setTtsProvider}
         heygenAvatars={HEYGEN_AVATARS}
         heygenVoices={HEYGEN_VOICES}
       />
@@ -869,12 +776,6 @@ export default function App() {
                   label="Versiones Sociales"
                 />
                 <TabButton 
-                  active={activeTab === 'video'} 
-                  onClick={() => setActiveTab('video')}
-                  icon={<Play className="w-4 h-4" />}
-                  label="Video Preview (AI)"
-                />
-                <TabButton 
                   active={activeTab === 'json'} 
                   onClick={() => setActiveTab('json')}
                   icon={<Download className="w-4 h-4" />}
@@ -931,17 +832,6 @@ export default function App() {
 
                   {activeTab === 'social' && (
                     <SocialTab result={result} />
-                  )}
-
-                  {activeTab === 'video' && (
-                    <VideoTab 
-                      result={result}
-                      veoStatus={veoStatus}
-                      veoProgress={veoProgress}
-                      veoVideoUrl={veoVideoUrl}
-                      veoError={veoError}
-                      generateVeoVideo={generateVeoVideo}
-                    />
                   )}
 
                   {activeTab === 'json' && (

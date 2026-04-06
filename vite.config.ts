@@ -8,7 +8,10 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'process.env.AI_GATEWAY_API_KEY': JSON.stringify(env.AI_GATEWAY_API_KEY),
+      'process.env.HEYGEN_API_KEY': JSON.stringify(env.HEYGEN_API_KEY),
+      'process.env.ELEVENLABS_API_KEY': JSON.stringify(env.ELEVENLABS_API_KEY),
+      'process.env.YOUTUBE_API_KEY': JSON.stringify(env.YOUTUBE_API_KEY),
     },
     resolve: {
       alias: {
