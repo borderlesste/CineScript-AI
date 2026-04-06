@@ -3,47 +3,73 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import { generateText, Output } from "ai";
-import { z } from "zod";
+import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
+
+// Initialize Google GenAI with API key (server-side only - not exposed to client)
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Schema for CineScript package
-const cineScriptSchema = z.object({
-  metadata: z.object({
-    title: z.string(),
-    year: z.string(),
-    genre: z.array(z.string()),
-    duration: z.string(),
-    rating: z.string(),
-    director: z.string(),
-    cast: z.array(z.string()),
-    synopsis: z.string()
-  }),
-  narrativeSummary: z.string(),
-  voiceOverScript: z.array(z.object({
-    timecode: z.string(),
-    visual: z.string(),
-    audio: z.string(),
-    transition: z.string()
-  })),
-  storyboard: z.array(z.object({
-    segment: z.string(),
-    description: z.string(),
-    visualReference: z.string(),
-    suggestedClips: z.array(z.string())
-  })),
-  socialVersions: z.array(z.object({
-    platform: z.string(),
-    hook: z.string(),
-    keyPoints: z.array(z.string()),
-    callToAction: z.string()
-  })),
-  youtubeReferences: z.array(z.string())
-});
+// Response schema for CineScript package (using Google GenAI Type format)
+const cineScriptSchema = {
+  type: Type.OBJECT,
+  properties: {
+    metadata: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        year: { type: Type.STRING },
+        genre: { type: Type.ARRAY, items: { type: Type.STRING } },
+        duration: { type: Type.STRING },
+        rating: { type: Type.STRING },
+        director: { type: Type.STRING },
+        cast: { type: Type.ARRAY, items: { type: Type.STRING } },
+        synopsis: { type: Type.STRING }
+      }
+    },
+    narrativeSummary: { type: Type.STRING },
+    voiceOverScript: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          timecode: { type: Type.STRING },
+          visual: { type: Type.STRING },
+          audio: { type: Type.STRING },
+          transition: { type: Type.STRING }
+        }
+      }
+    },
+    storyboard: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          segment: { type: Type.STRING },
+          description: { type: Type.STRING },
+          visualReference: { type: Type.STRING },
+          suggestedClips: { type: Type.ARRAY, items: { type: Type.STRING } }
+        }
+      }
+    },
+    socialVersions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          platform: { type: Type.STRING },
+          hook: { type: Type.STRING },
+          keyPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+          callToAction: { type: Type.STRING }
+        }
+      }
+    },
+    youtubeReferences: { type: Type.ARRAY, items: { type: Type.STRING } }
+  }
+};
 
 async function startServer() {
   const app = express();
@@ -51,20 +77,24 @@ async function startServer() {
 
   app.use(express.json());
 
-  // AI Content Generation API using Vercel AI Gateway
+  // AI Content Generation API using Google GenAI (server-side)
   app.post("/api/generate", async (req, res) => {
     try {
       const { query } = req.body;
-      
-      console.log("[v0] /api/generate called with query:", query);
       
       if (!query) {
         return res.status(400).json({ error: "Query is required" });
       }
 
-      const result = await generateText({
-        model: "google/gemini-2.5-flash",
-        system: `Eres un experto narrador cinematográfico. Genera un paquete JSON estructurado.
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server" });
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Genera el paquete CineScript AI para: "${query}"`,
+        config: {
+          systemInstruction: `Eres un experto narrador cinematográfico. Genera un paquete JSON estructurado.
           
 LÍMITES ESTRICTOS:
 - synopsis: máx 200 caracteres.
@@ -75,22 +105,38 @@ LÍMITES ESTRICTOS:
 REGLAS DE ORO:
 1. PROHIBIDO REPETIR TEXTO o entrar en bucles.
 2. Sé extremadamente conciso.
-3. Devuelve ÚNICAMENTE el JSON válido.`,
-        prompt: `Genera el paquete CineScript AI para: "${query}"`,
-        maxOutputTokens: 4096,
-        output: Output.object({ schema: cineScriptSchema }),
+3. Usa Google Search para datos reales.
+4. Devuelve ÚNICAMENTE el JSON válido.`,
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          maxOutputTokens: 4096,
+          responseSchema: cineScriptSchema
+        }
       });
-
-      console.log("[v0] generateText result:", JSON.stringify(result, null, 2));
       
-      res.json({ data: result.object });
+      if (!response.text) {
+        const finishReason = response.candidates?.[0]?.finishReason;
+        if (finishReason === 'SAFETY') {
+          return res.status(400).json({ error: "Contenido bloqueado por seguridad." });
+        }
+        return res.status(500).json({ error: "La IA no devolvió texto. Intenta de nuevo." });
+      }
+      
+      let cleanText = response.text.trim();
+      if (cleanText.startsWith("```json")) cleanText = cleanText.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+      else if (cleanText.startsWith("```")) cleanText = cleanText.replace(/^```\n?/, "").replace(/\n?```$/, "");
+      cleanText = cleanText.trim();
+
+      const data = JSON.parse(cleanText);
+      
+      res.json({ data });
     } catch (error: any) {
-      console.error("[v0] Error generating content:", error);
+      console.error("Error generating content:", error);
       res.status(500).json({ error: error.message || "Failed to generate content" });
     }
   });
 
-  // AI Poster Generation API using Vercel AI Gateway
+  // AI Poster Generation API using Google GenAI
   app.post("/api/generate-poster", async (req, res) => {
     try {
       const { title, synopsis, narrativeSummary } = req.body;
@@ -99,41 +145,46 @@ REGLAS DE ORO:
         return res.status(400).json({ error: "Title is required" });
       }
 
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server" });
+      }
+
       const prompt = `Crea un póster cinematográfico artístico y profesional para la película "${title}". 
       Estilo: Cinematográfico, épico, alta resolución. 
       Contexto: ${synopsis || ''}. 
       Elementos visuales: ${narrativeSummary?.substring(0, 500) || ''}.`;
 
-      // Use Gemini's image generation model via AI Gateway
-      const result = await generateText({
-        model: "google/gemini-2.5-flash-preview-image-generation",
-        providerOptions: {
-          google: {
-            responseModalities: ["TEXT", "IMAGE"],
-          }
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-image-generation',
+        contents: {
+          parts: [{ text: prompt }],
         },
-        prompt,
+        config: {
+          responseModalities: ["TEXT", "IMAGE"],
+        }
       });
 
       // Extract image from response
-      const imagePart = result.response?.messages?.[0]?.content?.find(
-        (part: any) => part.type === "image"
-      );
+      let imageUrl = '';
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if ((part as any).inlineData) {
+          imageUrl = `data:image/png;base64,${(part as any).inlineData.data}`;
+          break;
+        }
+      }
 
-      if (imagePart && imagePart.image) {
-        const base64Data = Buffer.from(imagePart.image).toString("base64");
-        res.json({ imageUrl: `data:image/png;base64,${base64Data}` });
+      if (imageUrl) {
+        res.json({ imageUrl });
       } else {
-        // Fallback: return a placeholder or error
         res.status(500).json({ error: "Image generation not available. Please try again." });
       }
     } catch (error: any) {
-      console.error("Error generating poster:", error);
+      console.error("[v0] Error generating poster:", error);
       res.status(500).json({ error: error.message || "Failed to generate poster" });
     }
   });
 
-  // AI Audio Generation API (TTS) using Vercel AI Gateway
+  // AI Audio Generation API (TTS) using Google GenAI
   app.post("/api/generate-audio", async (req, res) => {
     try {
       const { script } = req.body;
@@ -142,29 +193,28 @@ REGLAS DE ORO:
         return res.status(400).json({ error: "Script is required" });
       }
 
-      // Use Gemini's TTS model via AI Gateway
-      const result = await generateText({
-        model: "google/gemini-2.5-flash-preview-tts",
-        providerOptions: {
-          google: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: "Kore" },
-              },
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server" });
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: `Narración profesional de cine: ${script}` }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
             },
-          }
+          },
         },
-        prompt: `Narración profesional de cine: ${script}`,
       });
 
       // Extract audio from response
-      const audioPart = result.response?.messages?.[0]?.content?.find(
-        (part: any) => part.type === "file" && part.mimeType?.startsWith("audio/")
-      );
-
-      if (audioPart && audioPart.data) {
-        res.json({ audioBase64: audioPart.data, mimeType: audioPart.mimeType || "audio/wav" });
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      
+      if (base64Audio) {
+        res.json({ audioBase64: base64Audio, mimeType: "audio/wav" });
       } else {
         res.status(500).json({ error: "Audio generation not available. Please try again." });
       }

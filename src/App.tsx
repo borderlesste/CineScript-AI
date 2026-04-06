@@ -317,30 +317,13 @@ export default function App() {
     setResult(null);
 
     try {
-      console.log("Generando contenido para:", targetQuery);
-      
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: targetQuery })
       });
 
-      console.log("[v0] Response status:", response.status, response.statusText);
-      
-      const responseText = await response.text();
-      console.log("[v0] Response text:", responseText);
-      
-      if (!responseText) {
-        throw new Error('Empty response from server');
-      }
-      
-      let responseData;
-      try {
-        responseData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error("[v0] JSON parse error:", parseError);
-        throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
-      }
+      const responseData = await response.json();
       
       if (!response.ok) {
         throw new Error(responseData.error || 'Failed to generate content');
