@@ -4,26 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Search, 
-  Film, 
-  FileText, 
-  Layout, 
-  Share2, 
-  Download, 
-  Loader2, 
-  Youtube, 
-  Clapperboard,
-  ChevronRight,
-  Play,
-  Info,
-  CheckCircle2,
-  AlertCircle,
-  Copy,
-  Video,
-  Settings,
-  Plus
-} from 'lucide-react';
+import { Search, Film, FileText, LayoutGrid as Layout, Share2, Download, Loader as Loader2, Youtube, Clapperboard, ChevronRight, Play, Info, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, Copy, Video, Settings, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { cn } from './lib/utils';
@@ -116,9 +97,15 @@ export default function App() {
   useEffect(() => {
     const checkKey = async () => {
       if (window.aistudio?.hasSelectedApiKey) {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(hasKey);
-        setServicesStatus(prev => ({ ...prev, veo: hasKey }));
+        try {
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          setHasApiKey(hasKey);
+          setServicesStatus(prev => ({ ...prev, veo: hasKey }));
+        } catch (error) {
+          console.warn('Failed to check API key:', error);
+          setHasApiKey(false);
+          setServicesStatus(prev => ({ ...prev, veo: false }));
+        }
       }
     };
     checkKey();
@@ -126,10 +113,14 @@ export default function App() {
 
   const openKeyDialog = async () => {
     if (window.aistudio?.openSelectKey) {
-      await window.aistudio.openSelectKey();
-      const hasKey = await window.aistudio.hasSelectedApiKey();
-      setHasApiKey(hasKey);
-      setServicesStatus(prev => ({ ...prev, veo: hasKey }));
+      try {
+        await window.aistudio.openSelectKey();
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(hasKey);
+        setServicesStatus(prev => ({ ...prev, veo: hasKey }));
+      } catch (error) {
+        console.error('Failed to open key dialog:', error);
+      }
     }
   };
 
@@ -502,6 +493,10 @@ export default function App() {
       };
 
       const validateData = (data: any): CineScriptPackage => {
+        if (!data || typeof data !== 'object') {
+          throw new Error('Invalid data structure received from AI');
+        }
+
         return {
           metadata: {
             title: data.metadata?.title || 'Sin título',
@@ -554,13 +549,22 @@ export default function App() {
   };
 
   const generateHeyGenVideo = async () => {
-    if (!result || !result.voiceOverScript) return;
-    
+    if (!result || !result.voiceOverScript || !result.voiceOverScript.length) {
+      setError('No hay script de voz disponible para generar el video');
+      return;
+    }
+
     setHeygenStatus('generating');
     setHeygenError(null);
-    
+
     const fullScript = result.voiceOverScript.map(s => s.audio).join(' ');
-    
+
+    if (!fullScript.trim()) {
+      setError('El script de voz está vacío');
+      setHeygenStatus('error');
+      return;
+    }
+
     try {
       const userKey = localStorage.getItem('heygen_key');
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -618,11 +622,11 @@ export default function App() {
         });
         const data = await response.json();
         
-        if (data.data.status === 'completed') {
+        if (data.data?.status === 'completed') {
           clearInterval(interval);
           setHeygenVideoUrl(data.data.video_url);
           setHeygenStatus('completed');
-        } else if (data.data.status === 'failed') {
+        } else if (data.data?.status === 'failed') {
           clearInterval(interval);
           setHeygenError('HeyGen video generation failed');
           setHeygenStatus('error');
@@ -634,16 +638,24 @@ export default function App() {
   };
 
   const generateVeoVideo = async () => {
-    if (!result || !hasApiKey) return;
-    
+    if (!result) {
+      setError('No hay contenido generado para crear el video');
+      return;
+    }
+
+    if (!hasApiKey) {
+      setError('Necesitas seleccionar una clave API de Gemini para usar Veo');
+      return;
+    }
+
     setVeoStatus('generating');
     setVeoProgress(0);
     setVeoError(null);
-    
+
     try {
-      const prompt = `Cinematic video clip for the movie "${result.metadata.title}". 
-      Synopsis: ${result.metadata.synopsis}. 
-      Visual style: ${result.narrativeSummary.substring(0, 500)}. 
+      const prompt = `Cinematic video clip for the movie "${result.metadata.title}".
+      Synopsis: ${result.metadata.synopsis}.
+      Visual style: ${result.narrativeSummary.substring(0, 500)}.
       High fidelity, cinematic lighting, professional production.`;
 
       let operation = await ai.models.generateVideos({
@@ -679,21 +691,26 @@ export default function App() {
 
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
       if (downloadLink) {
-        // Fetch the video with the API key
-        const response = await fetch(downloadLink, {
-          method: 'GET',
-          headers: {
-            'x-goog-api-key': process.env.API_KEY || '',
-          },
-        });
-        
-        if (!response.ok) throw new Error("Error al descargar el video generado.");
-        
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        setVeoVideoUrl(url);
-        setVeoStatus('completed');
-        setVeoProgress(100);
+        try {
+          const response = await fetch(downloadLink, {
+            method: 'GET',
+            headers: {
+              'x-goog-api-key': process.env.GEMINI_API_KEY || '',
+            },
+          });
+
+          if (!response.ok) {
+            throw new Error(`Error al descargar el video: ${response.status} ${response.statusText}`);
+          }
+
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          setVeoVideoUrl(url);
+          setVeoStatus('completed');
+          setVeoProgress(100);
+        } catch (fetchError: any) {
+          throw new Error(`Error en la descarga del video: ${fetchError.message}`);
+        }
       } else {
         throw new Error("No se encontró el enlace de descarga del video.");
       }
