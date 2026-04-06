@@ -20,13 +20,24 @@ import {
   CheckCircle2,
   AlertCircle,
   Copy,
-  Video
+  Video,
+  Settings,
+  Plus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI, Type } from "@google/genai";
-import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
 import { CineScriptPackage } from './types';
+
+// Components
+import { Badge } from './components/ui/Badge';
+import { TabButton } from './components/ui/TabButton';
+import { SettingsModal } from './components/SettingsModal';
+import { MetadataTab } from './components/MetadataTab';
+import { ScriptTab } from './components/ScriptTab';
+import { StoryboardTab } from './components/StoryboardTab';
+import { SocialTab } from './components/SocialTab';
+import { VideoTab } from './components/VideoTab';
 
 declare global {
   interface Window {
@@ -67,6 +78,10 @@ export default function App() {
   const [heygenVideoUrl, setHeygenVideoUrl] = useState<string | null>(null);
   const [heygenStatus, setHeygenStatus] = useState<'idle' | 'generating' | 'polling' | 'completed' | 'error'>('idle');
   const [heygenError, setHeygenError] = useState<string | null>(null);
+  const [veoStatus, setVeoStatus] = useState<'idle' | 'generating' | 'polling' | 'completed' | 'error'>('idle');
+  const [veoProgress, setVeoProgress] = useState(0);
+  const [veoVideoUrl, setVeoVideoUrl] = useState<string | null>(null);
+  const [veoError, setVeoError] = useState<string | null>(null);
   const [selectedAvatar, setSelectedAvatar] = useState(() => localStorage.getItem('heygen_avatar') || HEYGEN_AVATARS[0].id);
   const [selectedVoice, setSelectedVoice] = useState(() => localStorage.getItem('heygen_voice') || HEYGEN_VOICES[0].id);
   const [activeTab, setActiveTab] = useState<'metadata' | 'script' | 'storyboard' | 'social' | 'json' | 'video'>(() => (localStorage.getItem('active_tab') as any) || 'metadata');
@@ -252,7 +267,7 @@ export default function App() {
         if (segment) {
           ctx.fillStyle = '#eab308';
           ctx.font = '30px Inter';
-          const lines = segment.audio.match(/.{1,60}(\s|$)/g) || [];
+          const lines = (segment.audio.match(/.{1,60}(\s|$)/g) || []) as string[];
           lines.forEach((line, i) => {
             ctx.fillText(line.trim(), canvas.width / 2, 400 + (i * 40));
           });
@@ -273,68 +288,6 @@ export default function App() {
     }
   };
 
-  const generateVideo = async () => {
-    if (!result) return;
-    if (!hasApiKey) {
-      await openKeyDialog();
-      return;
-    }
-
-    setGeneratingVideo(true);
-    setVideoProgress('Iniciando generación de video...');
-    setError(null);
-
-    try {
-      const videoAi = new GoogleGenAI({ apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY || '' });
-      
-      let operation = await videoAi.models.generateVideos({
-        model: 'veo-3.1-lite-generate-preview',
-        prompt: `Un tráiler cinematográfico épico para la película "${result.metadata.title}". 
-        Escena: ${result.narrativeSummary.substring(0, 300)}. 
-        Estilo: Cinematográfico, 4k, iluminación dramática.`,
-        image: result.generatedImageUrl ? {
-          imageBytes: result.generatedImageUrl.split(',')[1],
-          mimeType: 'image/png'
-        } : undefined,
-        config: {
-          numberOfVideos: 1,
-          resolution: '720p',
-          aspectRatio: '16:9'
-        }
-      });
-
-      while (!operation.done) {
-        setVideoProgress('Procesando video... Esto puede tardar unos minutos.');
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        operation = await videoAi.operations.getVideosOperation({ operation: operation });
-      }
-
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (downloadLink) {
-        const response = await fetch(downloadLink, {
-          method: 'GET',
-          headers: {
-            'x-goog-api-key': process.env.API_KEY || process.env.GEMINI_API_KEY || '',
-          },
-        });
-        const blob = await response.blob();
-        const videoUrl = URL.createObjectURL(blob);
-        setResult(prev => prev ? { ...prev, generatedVideoUrl: videoUrl } : null);
-      }
-    } catch (err: any) {
-      console.error("Error generating video:", err);
-      if (err.message?.includes("Requested entity was not found")) {
-        setHasApiKey(false);
-        setError("Error de autenticación. Por favor, selecciona tu API Key de nuevo.");
-      } else {
-        setError("No se pudo generar el video. Asegúrate de tener una API Key configurada.");
-      }
-    } finally {
-      setGeneratingVideo(false);
-      setVideoProgress('');
-    }
-  };
-
   const generatePoster = async () => {
     if (!result) return;
     setGeneratingImage(true);
@@ -342,8 +295,7 @@ export default function App() {
       const prompt = `Crea un póster cinematográfico artístico y profesional para la película "${result.metadata.title}". 
       Estilo: Cinematográfico, épico, alta resolución. 
       Contexto: ${result.metadata.synopsis}. 
-      Elementos visuales: ${result.narrativeSummary.substring(0, 500)}.
-      Sin texto, solo la composición visual.`;
+      Elementos visuales: ${result.narrativeSummary.substring(0, 500)}.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
@@ -352,22 +304,25 @@ export default function App() {
         },
         config: {
           imageConfig: {
-            aspectRatio: "3:4"
+            aspectRatio: "3:4",
           }
         }
       });
 
+      let imageUrl = '';
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) {
-          const base64Data = part.inlineData.data;
-          const imageUrl = `data:image/png;base64,${base64Data}`;
-          setResult(prev => prev ? { ...prev, generatedImageUrl: imageUrl } : null);
+          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
           break;
         }
       }
+
+      if (imageUrl) {
+        setResult(prev => prev ? { ...prev, generatedImageUrl: imageUrl } : null);
+      }
     } catch (err) {
-      console.error("Error generating image:", err);
-      setError("No se pudo generar el póster AI. Intenta de nuevo.");
+      console.error("Error generating poster:", err);
+      setError("No se pudo generar el póster. Inténtalo de nuevo.");
     } finally {
       setGeneratingImage(false);
     }
@@ -402,7 +357,7 @@ export default function App() {
           4. Devuelve ÚNICAMENTE el JSON válido.`,
           tools: [{ googleSearch: {} }],
           responseMimeType: "application/json",
-          maxOutputTokens: 2048,
+          maxOutputTokens: 4096,
           responseSchema: {
             type: Type.OBJECT,
             properties: {
@@ -482,22 +437,44 @@ export default function App() {
           JSON.parse(str);
           return str;
         } catch (e) {
-          let repaired = str;
+          let repaired = str.trim();
           
-          // If it ends with a partial string, close it
-          // Check if the last quote is an opening quote (after a colon or comma)
-          const lastQuote = repaired.lastIndexOf('"');
-          const lastColon = repaired.lastIndexOf(':');
-          const lastComma = repaired.lastIndexOf(',');
+          // Remove trailing backslash if any
+          if (repaired.endsWith('\\')) repaired = repaired.slice(0, -1);
+
+          // Handle truncated strings
+          let quoteCount = 0;
+          let inString = false;
+          for (let i = 0; i < repaired.length; i++) {
+            if (repaired[i] === '"' && (i === 0 || repaired[i - 1] !== '\\')) {
+              quoteCount++;
+              inString = !inString;
+            }
+          }
           
-          if (lastQuote > lastColon && lastQuote > lastComma) {
-            // We are likely inside a string
+          if (inString) {
             repaired += '"';
           }
 
-          // Balance braces/brackets
-          let openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
-          let openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+          // Remove trailing comma if any
+          repaired = repaired.replace(/,\s*$/, "");
+
+          // Balance braces/brackets ignoring those inside strings
+          let openBraces = 0;
+          let openBrackets = 0;
+          let currentlyInString = false;
+          
+          for (let i = 0; i < repaired.length; i++) {
+            if (repaired[i] === '"' && (i === 0 || repaired[i - 1] !== '\\')) {
+              currentlyInString = !currentlyInString;
+            }
+            if (!currentlyInString) {
+              if (repaired[i] === '{') openBraces++;
+              else if (repaired[i] === '}') openBraces--;
+              else if (repaired[i] === '[') openBrackets++;
+              else if (repaired[i] === ']') openBrackets--;
+            }
+          }
           
           while (openBrackets > 0) { repaired += ']'; openBrackets--; }
           while (openBraces > 0) { repaired += '}'; openBraces--; }
@@ -506,12 +483,18 @@ export default function App() {
             JSON.parse(repaired);
             return repaired;
           } catch (e2) {
-             // If still fails, try to find the last valid object/array end
+             // Final fallback: find the last complete object or array element
              const lastBrace = repaired.lastIndexOf('}');
              const lastBracket = repaired.lastIndexOf(']');
              const lastValidEnd = Math.max(lastBrace, lastBracket);
              if (lastValidEnd > 0) {
-               return repaired.substring(0, lastValidEnd + 1);
+               try {
+                 const truncated = repaired.substring(0, lastValidEnd + 1);
+                 // We might need to close parent structures if we truncated deeply
+                 return repairJson(truncated); 
+               } catch (e3) {
+                 return repaired;
+               }
              }
              return repaired;
           }
@@ -650,6 +633,77 @@ export default function App() {
     }, 5000);
   };
 
+  const generateVeoVideo = async () => {
+    if (!result || !hasApiKey) return;
+    
+    setVeoStatus('generating');
+    setVeoProgress(0);
+    setVeoError(null);
+    
+    try {
+      const prompt = `Cinematic video clip for the movie "${result.metadata.title}". 
+      Synopsis: ${result.metadata.synopsis}. 
+      Visual style: ${result.narrativeSummary.substring(0, 500)}. 
+      High fidelity, cinematic lighting, professional production.`;
+
+      let operation = await ai.models.generateVideos({
+        model: 'veo-3.1-lite-generate-preview',
+        prompt,
+        config: {
+          numberOfVideos: 1,
+          resolution: '1080p',
+          aspectRatio: '16:9'
+        }
+      });
+
+      pollVeoStatus(operation);
+    } catch (err: any) {
+      console.error("Veo Error:", err);
+      setVeoError(err.message || "Error al iniciar la generación de video.");
+      setVeoStatus('error');
+    }
+  };
+
+  const pollVeoStatus = async (initialOperation: any) => {
+    setVeoStatus('polling');
+    let operation = initialOperation;
+    
+    try {
+      while (!operation.done) {
+        // Update progress mock (Veo API doesn't provide real-time progress percentage in the same way)
+        setVeoProgress(prev => Math.min(prev + 5, 95));
+        
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        operation = await ai.operations.getVideosOperation({ operation });
+      }
+
+      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+      if (downloadLink) {
+        // Fetch the video with the API key
+        const response = await fetch(downloadLink, {
+          method: 'GET',
+          headers: {
+            'x-goog-api-key': process.env.API_KEY || '',
+          },
+        });
+        
+        if (!response.ok) throw new Error("Error al descargar el video generado.");
+        
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        setVeoVideoUrl(url);
+        setVeoStatus('completed');
+        setVeoProgress(100);
+      } else {
+        throw new Error("No se encontró el enlace de descarga del video.");
+      }
+    } catch (err: any) {
+      console.error("Polling Error:", err);
+      setVeoError(err.message || "Error durante el procesamiento del video.");
+      setVeoStatus('error');
+    }
+  };
+
   const downloadScript = () => {
     if (!result || !result.voiceOverScript) return;
     const content = result.voiceOverScript.map(s => `[${s.timecode}]\nVISUAL: ${s.visual}\nAUDIO: ${s.audio}\nTRANSICIÓN: ${s.transition}\n-------------------\n`).join('\n');
@@ -663,181 +717,57 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen font-sans selection:bg-cinema-gold selection:text-black">
-      {/* Header */}
-      <header className="border-b border-white/10 bg-cinema-black/80 sticky top-0 z-50 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-cinema-gold rounded-lg flex items-center justify-center shadow-lg shadow-cinema-gold/20">
-              <Clapperboard className="text-black w-6 h-6" />
+    <div className="min-h-screen bg-cinema-black text-white font-sans selection:bg-cinema-gold selection:text-black">
+      {/* Navigation */}
+      <nav className="border-b border-white/10 bg-cinema-black/80 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-cinema-gold rounded-xl flex items-center justify-center shadow-lg shadow-cinema-gold/20">
+              <Film className="w-6 h-6 text-black" />
             </div>
-            <h1 className="text-xl font-display font-bold tracking-tight">
-              CineScript <span className="text-cinema-gold">AI</span>
-            </h1>
+            <div>
+              <h1 className="text-xl font-display font-black tracking-tighter">CINESCRIPT <span className="text-cinema-gold">AI</span></h1>
+              <p className="text-[10px] font-bold text-gray-500 tracking-[0.2em] uppercase">Production Suite</p>
+            </div>
           </div>
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-gray-400">
-            <a href="#" className="hover:text-white transition-colors">Concepto</a>
-            <a href="#" className="hover:text-white transition-colors">Arquitectura</a>
-            <a href="#" className="hover:text-white transition-colors">Legal</a>
+          
+          <div className="flex items-center gap-4">
             <button 
               onClick={() => setShowSettings(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 transition-all text-xs font-bold text-cinema-gold"
+              className="p-2 hover:bg-white/5 rounded-full transition-colors relative"
             >
-              <Info className="w-3 h-3" /> CONFIGURACIÓN
+              <Settings className="w-5 h-5 text-gray-400" />
+              {(!servicesStatus.tmdb || !servicesStatus.heygen) && (
+                <span className="absolute top-1 right-1 w-2 h-2 bg-cinema-gold rounded-full border-2 border-cinema-black"></span>
+              )}
+            </button>
+            <button 
+              onClick={() => {
+                setResult(null);
+                setQuery('');
+              }}
+              className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-bold transition-all flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" /> NUEVO PROYECTO
             </button>
           </div>
         </div>
-      </header>
+      </nav>
 
-      {/* Settings Modal */}
-      <AnimatePresence>
-        {showSettings && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowSettings(false)}
-              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-cinema-black border border-white/10 rounded-3xl p-8 shadow-2xl"
-            >
-              <div className="flex items-center justify-between mb-8">
-                <h3 className="text-2xl font-display font-bold">Gestión de Servicios</h3>
-                <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-white">
-                  <AlertCircle className="w-6 h-6 rotate-45" />
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                {/* Gemini Status */}
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.gemini ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
-                    <div>
-                      <h4 className="font-bold text-sm">Gemini AI (Free/System)</h4>
-                      <p className="text-xs text-gray-500">Motor principal de generación</p>
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                    {servicesStatus.gemini ? "CONECTADO" : "SIN CLAVE"}
-                  </span>
-                </div>
-
-                {/* Veo Status */}
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.veo ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
-                    <div>
-                      <h4 className="font-bold text-sm">Veo 3.1 (Paid/Video)</h4>
-                      <p className="text-xs text-gray-500">Generación de video cinematográfico</p>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={openKeyDialog}
-                    className="px-3 py-1.5 bg-cinema-gold text-black text-[10px] font-black rounded-lg hover:bg-yellow-400 transition-all"
-                  >
-                    {servicesStatus.veo ? "CAMBIAR CLAVE" : "SELECCIONAR CLAVE"}
-                  </button>
-                </div>
-
-                {/* TMDb Status (Mock/Manual) */}
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.tmdb ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
-                      <div>
-                        <h4 className="font-bold text-sm">TMDb API (Opcional)</h4>
-                        <p className="text-xs text-gray-500">Metadatos oficiales extendidos</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <input 
-                      type="password" 
-                      defaultValue={localStorage.getItem('tmdb_key') || ''}
-                      placeholder="Ingresa tu API Key de TMDb"
-                      className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold"
-                      onBlur={(e) => saveTmdbKey(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                {/* HeyGen Status */}
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className={cn("w-3 h-3 rounded-full shadow-[0_0_10px_rgba(0,0,0,0.5)]", servicesStatus.heygen ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50")} />
-                      <div>
-                        <h4 className="font-bold text-sm">HeyGen AI (Avatar Video)</h4>
-                        <p className="text-xs text-gray-500">Generación de videos con avatares AI</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="flex gap-2">
-                      <input 
-                        type="password" 
-                        defaultValue={localStorage.getItem('heygen_key') || ''}
-                        placeholder="Ingresa tu API Key de HeyGen"
-                        className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold"
-                        onBlur={(e) => saveHeygenKey(e.target.value)}
-                      />
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Avatar</label>
-                        <select 
-                          value={selectedAvatar}
-                          onChange={(e) => setSelectedAvatar(e.target.value)}
-                          className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold appearance-none"
-                        >
-                          {HEYGEN_AVATARS.map(avatar => (
-                            <option key={avatar.id} value={avatar.id}>{avatar.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Voz</label>
-                        <select 
-                          value={selectedVoice}
-                          onChange={(e) => setSelectedVoice(e.target.value)}
-                          className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-cinema-gold appearance-none"
-                        >
-                          {HEYGEN_VOICES.map(voice => (
-                            <option key={voice.id} value={voice.id}>{voice.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-8 pt-6 border-t border-white/10 space-y-4">
-                <button 
-                  onClick={() => {
-                    localStorage.clear();
-                    window.location.reload();
-                  }}
-                  className="w-full py-2 text-[10px] font-bold text-red-500/50 hover:text-red-500 transition-colors uppercase tracking-widest"
-                >
-                  Limpiar Caché y Preferencias
-                </button>
-                <p className="text-[10px] text-gray-500 leading-relaxed text-center">
-                  Las claves de Gemini y Veo se gestionan a través de la plataforma de AI Studio para mayor seguridad. 
-                  La clave de TMDb se guarda localmente en tu navegador.
-                </p>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <SettingsModal 
+        show={showSettings}
+        onClose={() => setShowSettings(false)}
+        servicesStatus={servicesStatus}
+        openKeyDialog={openKeyDialog}
+        saveTmdbKey={saveTmdbKey}
+        saveHeygenKey={saveHeygenKey}
+        selectedAvatar={selectedAvatar}
+        setSelectedAvatar={setSelectedAvatar}
+        selectedVoice={selectedVoice}
+        setSelectedVoice={setSelectedVoice}
+        heygenAvatars={HEYGEN_AVATARS}
+        heygenVoices={HEYGEN_VOICES}
+      />
 
       <main className="max-w-7xl mx-auto px-4 py-12">
         {/* Search Section */}
@@ -974,373 +904,44 @@ export default function App() {
               <div className="lg:col-span-9">
                 <div className="glass-panel rounded-3xl p-8 min-h-[600px]">
                   {activeTab === 'metadata' && (
-                    <div className="space-y-8">
-                      <div className="flex flex-col md:flex-row gap-8">
-                        <div className="w-full md:w-64 space-y-4">
-                          <div className="h-96 bg-white/5 rounded-2xl overflow-hidden border border-white/10 flex items-center justify-center relative group">
-                            {result.generatedImageUrl ? (
-                              <img 
-                                src={result.generatedImageUrl} 
-                                alt="AI Generated Poster" 
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <Film className="w-12 h-12 text-white/10" />
-                            )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex flex-col justify-end p-6">
-                              <span className="text-cinema-gold text-xs font-bold uppercase tracking-widest mb-1">{result.metadata.year}</span>
-                              <h3 className="text-xl font-bold leading-tight">{result.metadata.title}</h3>
-                            </div>
-                          </div>
-                          
-                          <button 
-                            onClick={generatePoster}
-                            disabled={generatingImage}
-                            className="w-full py-3 px-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-bold text-cinema-gold transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                          >
-                            {generatingImage ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Clapperboard className="w-4 h-4" />
-                            )}
-                            {generatingImage ? 'GENERANDO PÓSTER...' : 'GENERAR PÓSTER AI'}
-                          </button>
-                        </div>
-                        
-                        <div className="flex-1 space-y-6">
-                          <div className="flex flex-wrap gap-4">
-                            <Badge icon={<Info className="w-3 h-3" />} label={result.metadata?.rating} />
-                            <Badge label={result.metadata?.duration} />
-                            {result.metadata?.genre?.map(g => <Badge key={g} label={g} variant="outline" />)}
-                          </div>
-                          
-                          <div>
-                            <h4 className="text-cinema-gold font-bold text-sm uppercase tracking-widest mb-2">Director</h4>
-                            <p className="text-lg">{result.metadata?.director}</p>
-                          </div>
-
-                          <div>
-                            <h4 className="text-cinema-gold font-bold text-sm uppercase tracking-widest mb-2">Reparto Principal</h4>
-                            <p className="text-gray-300">{result.metadata?.cast?.join(', ')}</p>
-                          </div>
-
-                          <div>
-                            <h4 className="text-cinema-gold font-bold text-sm uppercase tracking-widest mb-2">Sinopsis Oficial</h4>
-                            <p className="text-gray-300 leading-relaxed italic">"{result.metadata?.synopsis}"</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="border-t border-white/10 pt-8">
-                        <h3 className="text-2xl font-display font-bold mb-4">Resumen Narrativo Cinematográfico</h3>
-                        <div className="markdown-body text-gray-300">
-                          <ReactMarkdown>{result.narrativeSummary}</ReactMarkdown>
-                        </div>
-                      </div>
-                    </div>
+                    <MetadataTab 
+                      result={result} 
+                      generatePoster={generatePoster} 
+                      generatingImage={generatingImage} 
+                    />
                   )}
 
                   {activeTab === 'script' && (
-                    <div className="space-y-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-2xl font-display font-bold">Guion de Voz en Off</h3>
-                        <div className="flex items-center gap-4">
-                          <button 
-                            onClick={generateAudio}
-                            disabled={generatingAudio}
-                            className="flex items-center gap-2 text-xs font-bold text-cinema-gold hover:text-yellow-400 transition-colors disabled:opacity-50"
-                          >
-                            {generatingAudio ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Play className="w-4 h-4" />
-                            )}
-                            GENERAR NARRACIÓN (TTS)
-                          </button>
-                          <button 
-                            onClick={generateHeyGenVideo}
-                            disabled={heygenStatus === 'generating' || heygenStatus === 'polling'}
-                            className="flex items-center gap-2 text-xs font-bold text-cinema-gold hover:text-yellow-400 transition-colors disabled:opacity-50"
-                          >
-                            {heygenStatus === 'generating' || heygenStatus === 'polling' ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Video className="w-4 h-4" />
-                            )}
-                            GENERAR AVATAR VIDEO
-                          </button>
-                          <button 
-                            onClick={downloadScript}
-                            className="flex items-center gap-2 text-xs font-bold text-cinema-gold hover:text-yellow-400 transition-colors"
-                          >
-                            <Download className="w-4 h-4" /> DESCARGAR .TXT
-                          </button>
-                          <button 
-                            onClick={() => copyToClipboard(result.voiceOverScript?.map(s => `[${s.timecode}] ${s.audio}`).join('\n') || '')}
-                            className="flex items-center gap-2 text-xs font-bold text-cinema-gold hover:text-yellow-400 transition-colors"
-                          >
-                            <Copy className="w-4 h-4" /> COPIAR GUION
-                          </button>
-                        </div>
-                      </div>
-                      <div className="space-y-4">
-                        {result.generatedAudioUrl && (
-                          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-6 flex items-center justify-between">
-                            <div className="flex items-center gap-4">
-                              <div className="w-10 h-10 bg-cinema-gold/20 rounded-full flex items-center justify-center">
-                                <Play className="w-5 h-5 text-cinema-gold" />
-                              </div>
-                              <div>
-                                <h4 className="font-bold text-sm">Narración Generada</h4>
-                                <p className="text-xs text-gray-500">Audio profesional por Gemini TTS</p>
-                              </div>
-                            </div>
-                            <audio src={result.generatedAudioUrl} controls className="h-8" />
-                          </div>
-                        )}
-
-                        {heygenStatus === 'completed' && heygenVideoUrl && (
-                          <div className="bg-cinema-gold/10 border border-cinema-gold/30 rounded-2xl p-6 mb-6">
-                            <h4 className="text-cinema-gold font-bold mb-4 flex items-center gap-2">
-                              <CheckCircle2 className="w-5 h-5" /> Video de Avatar Generado
-                            </h4>
-                            <video 
-                              src={heygenVideoUrl} 
-                              controls 
-                              className="w-full rounded-xl shadow-2xl border border-white/10"
-                            />
-                          </div>
-                        )}
-                        
-                        {heygenStatus === 'error' && (
-                          <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 mb-6 flex items-center gap-3 text-red-400">
-                            <AlertCircle className="w-5 h-5" />
-                            <p className="text-sm font-medium">{heygenError}</p>
-                          </div>
-                        )}
-
-                        {result.voiceOverScript?.map((seg, i) => (
-                          <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-6 flex gap-6">
-                            <div className="w-24 shrink-0 font-mono text-cinema-gold font-bold text-sm">{seg.timecode}</div>
-                            <div className="flex-1 space-y-4">
-                              <div>
-                                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-1">Visual</span>
-                                <p className="text-sm text-gray-400">{seg.visual}</p>
-                              </div>
-                              <div>
-                                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-1">Audio (Voz en Off)</span>
-                                <p className="text-lg leading-relaxed text-white font-medium">{seg.audio}</p>
-                              </div>
-                              <div className="flex items-center gap-2 text-[10px] font-bold text-cinema-gold/60 uppercase">
-                                <ChevronRight className="w-3 h-3" /> Transición: {seg.transition}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <ScriptTab 
+                      result={result}
+                      generateAudio={generateAudio}
+                      generatingAudio={generatingAudio}
+                      generateHeyGenVideo={generateHeyGenVideo}
+                      heygenStatus={heygenStatus}
+                      heygenVideoUrl={heygenVideoUrl}
+                      heygenError={heygenError}
+                      downloadScript={downloadScript}
+                      copyToClipboard={copyToClipboard}
+                    />
                   )}
 
                   {activeTab === 'storyboard' && (
-                    <div className="space-y-6">
-                      <h3 className="text-2xl font-display font-bold mb-4">Storyboard & Plan de Edición</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {result.storyboard?.map((item, i) => (
-                          <div key={i} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden flex flex-col">
-                            <div className="h-40 bg-white/10 flex items-center justify-center relative">
-                              <Layout className="w-8 h-8 text-white/10" />
-                              <div className="absolute top-4 left-4 bg-cinema-gold text-black text-[10px] font-black px-2 py-1 rounded">
-                                SEGMENTO {i + 1}
-                              </div>
-                              <div className="absolute bottom-4 left-4 right-4">
-                                <h4 className="font-bold text-lg">{item.segment}</h4>
-                              </div>
-                            </div>
-                            <div className="p-6 space-y-4 flex-1">
-                              <p className="text-sm text-gray-400">{item.description}</p>
-                              <div className="p-3 bg-black/40 rounded-xl border border-white/5">
-                                <span className="text-[10px] font-bold text-cinema-gold uppercase block mb-1">Referencia Visual</span>
-                                <p className="text-xs text-gray-300">{item.visualReference}</p>
-                              </div>
-                              <div>
-                                <span className="text-[10px] font-bold text-gray-500 uppercase block mb-2">Clips Sugeridos</span>
-                                <div className="flex flex-wrap gap-2">
-                                  {item.suggestedClips?.map((clip, j) => (
-                                    <span key={j} className="text-[10px] bg-white/5 px-2 py-1 rounded border border-white/10 text-gray-400">
-                                      {clip}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <StoryboardTab result={result} />
                   )}
 
                   {activeTab === 'social' && (
-                    <div className="space-y-8">
-                      <h3 className="text-2xl font-display font-bold mb-4">Adaptaciones para Redes Sociales</h3>
-                      <div className="grid grid-cols-1 gap-6">
-                        {result.socialVersions?.map((version, i) => (
-                          <div key={i} className="bg-white/5 border border-white/10 rounded-3xl p-8 flex flex-col md:flex-row gap-8">
-                            <div className="w-full md:w-48 shrink-0 flex flex-col items-center justify-center p-6 bg-cinema-gold/10 rounded-2xl border border-cinema-gold/20">
-                              {version.platform === 'YouTube' ? <Youtube className="w-12 h-12 text-red-500 mb-2" /> : <Share2 className="w-12 h-12 text-cinema-gold mb-2" />}
-                              <span className="font-display font-bold text-xl">{version.platform}</span>
-                            </div>
-                            <div className="flex-1 space-y-6">
-                              <div>
-                                <span className="text-xs font-bold text-cinema-gold uppercase tracking-widest block mb-2">Gancho (Hook)</span>
-                                <p className="text-xl font-bold leading-tight text-white">"{version.hook}"</p>
-                              </div>
-                              <div>
-                                <span className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-2">Puntos Clave</span>
-                                <ul className="space-y-2">
-                                  {version.keyPoints?.map((p, j) => (
-                                    <li key={j} className="flex items-start gap-2 text-gray-300">
-                                      <CheckCircle2 className="w-4 h-4 text-cinema-gold shrink-0 mt-1" />
-                                      {p}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                              <div className="pt-4 border-t border-white/5">
-                                <span className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-2">Call to Action</span>
-                                <p className="text-cinema-gold font-bold">{version.callToAction}</p>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <SocialTab result={result} />
                   )}
 
                   {activeTab === 'video' && (
-                    <div className="space-y-8 text-center py-12">
-                      <div className="max-w-3xl mx-auto space-y-8">
-                        <div className="w-20 h-20 bg-cinema-gold/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                          <Play className="w-10 h-10 text-cinema-gold" />
-                        </div>
-                        <div className="space-y-2">
-                          <h3 className="text-3xl font-display font-bold">Estudio de Producción AI</h3>
-                          <p className="text-gray-400">
-                            Genera la narración profesional y exporta un video sincronizado con tu guion y storyboard.
-                          </p>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          {/* TTS Section */}
-                          <div className="glass-panel p-8 rounded-3xl space-y-6 text-left">
-                            <div className="flex items-center gap-3 mb-2">
-                              <div className="p-2 bg-cinema-gold/20 rounded-lg">
-                                <FileText className="w-5 h-5 text-cinema-gold" />
-                              </div>
-                              <h4 className="font-bold text-lg">Narración de Voz (TTS)</h4>
-                            </div>
-                            <p className="text-xs text-gray-500 leading-relaxed">
-                              Convierte tu guion en una narración cinematográfica profesional usando Gemini TTS.
-                            </p>
-                            
-                            {result.generatedAudioUrl ? (
-                              <div className="space-y-4">
-                                <audio src={result.generatedAudioUrl} controls className="w-full h-10" />
-                                <button 
-                                  onClick={generateAudio}
-                                  disabled={generatingAudio}
-                                  className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-bold text-cinema-gold transition-all flex items-center justify-center gap-2"
-                                >
-                                  {generatingAudio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                                  REGENERAR AUDIO
-                                </button>
-                              </div>
-                            ) : (
-                              <button 
-                                onClick={generateAudio}
-                                disabled={generatingAudio}
-                                className="w-full py-4 bg-cinema-gold text-black font-bold rounded-xl hover:bg-yellow-400 transition-all flex items-center justify-center gap-2"
-                              >
-                                {generatingAudio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-                                GENERAR NARRACIÓN AI
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Video Export Section */}
-                          <div className="glass-panel p-8 rounded-3xl space-y-6 text-left">
-                            <div className="flex items-center gap-3 mb-2">
-                              <div className="p-2 bg-cinema-gold/20 rounded-lg">
-                                <Download className="w-5 h-5 text-cinema-gold" />
-                              </div>
-                              <h4 className="font-bold text-lg">Exportar Video Sincronizado</h4>
-                            </div>
-                            <p className="text-xs text-gray-500 leading-relaxed">
-                              Crea un video (WEBM/MP4) que sincroniza la voz con los segmentos del storyboard y el póster.
-                            </p>
-                            
-                            <button 
-                              onClick={exportToVideo}
-                              disabled={!result.generatedAudioUrl || exportingVideo}
-                              className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                            >
-                              {exportingVideo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                              {exportingVideo ? 'EXPORTANDO...' : 'EXPORTAR VIDEO FINAL'}
-                            </button>
-                            {!result.generatedAudioUrl && (
-                              <p className="text-[10px] text-red-400 text-center italic">
-                                * Debes generar la narración primero
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Veo Section (Original) */}
-                        <div className="pt-12 border-t border-white/10">
-                          <h4 className="text-xl font-display font-bold mb-4">Generador de Tráiler Visual (Veo 3.1)</h4>
-                          <div className="max-w-2xl mx-auto space-y-6">
-                            {!hasApiKey && (
-                              <div className="p-6 bg-cinema-gold/5 border border-cinema-gold/20 rounded-2xl space-y-4">
-                                <p className="text-sm text-cinema-gold font-medium">
-                                  Para usar la generación de video avanzada, necesitas seleccionar una API Key de pago.
-                                </p>
-                                <button 
-                                  onClick={openKeyDialog}
-                                  className="px-8 py-3 bg-cinema-gold text-black font-bold rounded-xl hover:bg-yellow-400 transition-all"
-                                >
-                                  Configurar API Key
-                                </button>
-                              </div>
-                            )}
-
-                            {result.generatedVideoUrl ? (
-                              <div className="space-y-6">
-                                <div className="aspect-video bg-black rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
-                                  <video src={result.generatedVideoUrl} controls className="w-full h-full object-contain" />
-                                </div>
-                                <button 
-                                  onClick={generateVideo}
-                                  disabled={generatingVideo}
-                                  className="px-8 py-3 bg-cinema-gold text-black rounded-xl font-bold text-sm hover:bg-yellow-400 transition-all disabled:opacity-50 flex items-center gap-2 mx-auto"
-                                >
-                                  {generatingVideo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                                  REGENERAR CLIP VEO
-                                </button>
-                              </div>
-                            ) : (
-                              <button 
-                                onClick={generateVideo}
-                                disabled={!hasApiKey || !result.generatedImageUrl || generatingVideo}
-                                className="px-12 py-4 bg-cinema-gold text-black font-bold rounded-2xl hover:bg-yellow-400 transition-all shadow-lg shadow-cinema-gold/20 disabled:opacity-50 flex items-center gap-3 mx-auto"
-                              >
-                                {generatingVideo ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
-                                GENERAR CLIP VEO 3.1
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <VideoTab 
+                      result={result}
+                      veoStatus={veoStatus}
+                      veoProgress={veoProgress}
+                      veoVideoUrl={veoVideoUrl}
+                      veoError={veoError}
+                      generateVeoVideo={generateVeoVideo}
+                    />
                   )}
 
                   {activeTab === 'json' && (
@@ -1382,7 +983,6 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Footer / Documentation Preview */}
       <footer className="border-t border-white/10 bg-cinema-black py-16 mt-24">
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-12">
           <div>
@@ -1402,40 +1002,11 @@ export default function App() {
           <div>
             <h4 className="text-cinema-gold font-bold uppercase tracking-widest mb-6 text-sm">Legal & Ética</h4>
             <p className="text-gray-400 text-sm leading-relaxed">
-              El contenido generado es una sugerencia creativa. Se recomienda el uso de material bajo "Fair Use" y siempre validar los datos oficiales antes de publicar.
+              El contenido generado es una sugerencia creativa. Se recomienda el uso de material bajo "Fair Use" and siempre validar los datos oficiales antes de publicar.
             </p>
           </div>
         </div>
       </footer>
     </div>
-  );
-}
-
-function TabButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all",
-        active 
-          ? "bg-cinema-gold text-black shadow-lg shadow-cinema-gold/20" 
-          : "text-gray-400 hover:bg-white/5 hover:text-white"
-      )}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
-
-function Badge({ label, icon, variant = 'default' }: { label: string, icon?: React.ReactNode, variant?: 'default' | 'outline' }) {
-  return (
-    <span className={cn(
-      "px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5",
-      variant === 'default' ? "bg-cinema-gold/10 text-cinema-gold border border-cinema-gold/20" : "border border-white/20 text-gray-400"
-    )}>
-      {icon}
-      {label}
-    </span>
   );
 }
